@@ -3,825 +3,860 @@
 import React, { useState } from "react";
 import Link from "next/link";
 
-interface DecisionAnswers {
-  [key: string]: {
-    type: "noul" | "choice" | "score";
-    noul?: number;
-    choice?: string;
-    probabilities?: Record<string, number>;
-    score?: string | number;
-    distribution?: Record<string, number>;
-    confidence?: number;
-  };
+interface SubAgentDef {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  questionKey: string;
 }
 
-const PRESETS = [
+const SUB_AGENTS: SubAgentDef[] = [
   {
-    id: "support",
-    title: "Support Ticket Escalation",
-    state: "Help! My payouts have been failing for 3 days and my bank is rejecting the transfers.",
-    questions: {
-      is_urgent: {
-        type: "noul",
-        instructions: "Does this message convey urgency?",
-        criteria: {
-          true: "Explicitly time-sensitive",
-          false: "No urgency expressed",
-        },
-      },
-      department: {
-        type: "choice",
-        instructions: "Which team should handle this?",
-        criteria: {
-          billing: "Payments, invoicing, refunds",
-          technical: "Bugs, outages, integrations",
-          sales: "Pricing, upgrades, new accounts",
-        },
-      },
-      frustration: {
-        type: "score",
-        instructions: "How frustrated is the customer?",
-        criteria: ["Calm", "Frustrated", "Very angry"],
-      },
-    },
+    id: "db_write_agent",
+    name: "db_write_agent",
+    role: "Database Write Access",
+    description: "Write access to app database for creation, updation, or deletion only.",
+    questionKey: "needs_db_write",
   },
   {
-    id: "moderation",
-    title: "Content Safety & Moderation",
-    state: "Buy cheap crypto tokens right now on bit-scam.xyz to 100x your money overnight!!! Guaranteed!",
-    questions: {
-      is_spam: {
-        type: "noul",
-        instructions: "Is this message unsolicited commercial spam or a scam?",
-        criteria: {
-          true: "Promotional spam or deceptive scam",
-          false: "Legitimate user discussion",
-        },
-      },
-      risk_level: {
-        type: "choice",
-        instructions: "Assess safety risk category",
-        criteria: {
-          critical: "Financial fraud or phishing risk",
-          medium: "Low quality promotional content",
-          safe: "Harmless post",
-        },
-      },
-      urgency_to_ban: {
-        type: "score",
-        instructions: "Severity level for moderation action",
-        criteria: ["Ignore", "Flag for review", "Immediate quarantine"],
-      },
-    },
+    id: "memory_agent",
+    name: "memory_agent",
+    role: "User Memory & Preferences",
+    description: "Recall old memory or user preferences when user asks or when older memory is needed to answer.",
+    questionKey: "needs_memory",
   },
   {
-    id: "sales",
-    title: "Sales Lead Qualification",
-    state: "We are an enterprise team of 450 engineers looking to replace our current API infrastructure before Q3.",
-    questions: {
-      is_enterprise: {
-        type: "noul",
-        instructions: "Is the inquiry from a large enterprise team?",
-        criteria: {
-          true: "Over 50 users or explicit enterprise budget",
-          false: "Individual or small team",
-        },
-      },
-      timeline: {
-        type: "choice",
-        instructions: "When is the prospect planning to purchase?",
-        criteria: {
-          immediate: "Current quarter / urgent rollout",
-          mid_term: "Next 1-2 quarters",
-          exploratory: "Browsing or no clear timeline",
-        },
-      },
-      buyer_intent: {
-        type: "score",
-        instructions: "Buying readiness signal",
-        criteria: ["Casual interest", "Evaluating vendors", "Ready to purchase"],
-      },
-    },
+    id: "analysis_agent",
+    name: "analysis_agent",
+    role: "Database Read & Analytics",
+    description: "Read access to app database for tasks, issues, tickets and summarizing work and project status.",
+    questionKey: "needs_analysis",
+  },
+  {
+    id: "web_agent",
+    name: "web_agent",
+    role: "Live Web & Browsing",
+    description: "Google search, scraping public URLs, news, and real-time internet lookups.",
+    questionKey: "needs_web",
+  },
+  {
+    id: "mcp_agent",
+    name: "mcp_agent",
+    role: "Third-Party Apps & Integrations",
+    description: "Linear issues, Sentry errors, Slack messages, booking calendar meetings, external MCP tools.",
+    questionKey: "needs_mcp",
+  },
+  {
+    id: "sprint_agent",
+    name: "sprint_agent",
+    role: "Sprint Management",
+    description: "Creating, managing sprints, team sprint updates, or anything regarding sprint.",
+    questionKey: "needs_sprint",
   },
 ];
 
-export default function JevUseCasePage() {
+const PROMPT_SAMPLES = [
+  {
+    label: "💬 Simple Chit-Chat",
+    prompt: "Hey! How is your day going? Just wanted to check in and say hi!",
+  },
+  {
+    label: "💾 DB Write Only",
+    prompt: "Delete user record with id #4092 from the database and insert a new audit log row.",
+  },
+  {
+    label: "📊 Database Read & Analysis",
+    prompt: "Read all pending issues and tickets from our app database and summarize the project status for this week.",
+  },
+  {
+    label: "🧠 Memory Recall",
+    prompt: "What were the user preferences and design rules I told you to remember earlier?",
+  },
+  {
+    label: "🏃 Sprint Management",
+    prompt: "Create a new sprint for next week, assign the team sprint goals, and summarize current sprint progress.",
+  },
+  {
+    label: "🔌 Third-Party MCP (Linear/Slack)",
+    prompt: "Create a Linear issue for this auth bug, post an alert in the #dev Slack channel, and check Sentry errors.",
+  },
+];
+
+export default function JevPage() {
+  const [activeTab, setActiveTab] = useState<"orchestrator" | "learn">("orchestrator");
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [selectedPreset, setSelectedPreset] = useState(PRESETS[0]);
-  const [stateInput, setStateInput] = useState(PRESETS[0].state);
-  const [questionsJson, setQuestionsJson] = useState(
-    JSON.stringify(PRESETS[0].questions, null, 2)
+
+  // Multi-Agent prompt & state
+  const [promptInput, setPromptInput] = useState(
+    "Create a Linear issue for this auth bug, post an alert in the #dev Slack channel, and check Sentry errors."
   );
-  const [activeCodeTab, setActiveCodeTab] = useState<"ts" | "fetch" | "curl" | "py">("fetch");
-  const [copiedCode, setCopiedCode] = useState(false);
+  const [isRouting, setIsRouting] = useState(false);
+  const [routingResult, setRoutingResult] = useState<any>(null);
+  const [routingError, setRoutingError] = useState<string | null>(null);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
 
-  // Execution state
-  const [isRunning, setIsRunning] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [executionResult, setExecutionResult] = useState<any>(null);
-  const [execTimeMs, setExecTimeMs] = useState<number | null>(null);
+  // Model & Reasoning Selection state
+  const [modelPrompt, setModelPrompt] = useState(
+    "Design and optimize an end-to-end distributed transaction consensus protocol with formal mathematical proofs, fault-tolerance edge cases, and deadlock prevention under Byzantine failures."
+  );
+  const [isSelectingModel, setIsSelectingModel] = useState(false);
+  const [modelResult, setModelResult] = useState<any>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelLatencyMs, setModelLatencyMs] = useState<number | null>(null);
 
-  const applyPreset = (preset: (typeof PRESETS)[0]) => {
-    setSelectedPreset(preset);
-    setStateInput(preset.state);
-    setQuestionsJson(JSON.stringify(preset.questions, null, 2));
-    setExecutionResult(null);
-    setErrorMsg(null);
-  };
+  const handleSelectModel = async () => {
+    if (!modelPrompt.trim()) return;
+    setIsSelectingModel(true);
+    setModelError(null);
+    setModelResult(null);
+    const start = performance.now();
 
-  const handleRunDecision = async () => {
-    setIsRunning(true);
-    setErrorMsg(null);
-    setExecutionResult(null);
-    const startTime = performance.now();
+    const questions = {
+      selected_model: {
+        type: "choice",
+        instructions:
+          "Which AI model is best suited to execute this task efficiently and effectively based on task complexity, coding difficulty, and required capability? (Select exactly ONE model).",
+        criteria: {
+          "gpt-0ss-120b": "Fast, basic, low-complexity tasks, simple formatting, or short answers requiring no reasoning.",
+          "gpt-4.1-mini": "Standard day-to-day coding, routine scripts, basic lookups, lightweight translation without deep reasoning.",
+          "gpt-5.1-mini": "Moderate-to-high complexity tasks, multi-step code refactoring, system architecture, or logical reasoning.",
+          "gpt-6-luna": "Extremely complex, mission-critical problems, formal mathematical proofs, advanced algorithmic design, deep architectural optimization, or hardest frontier challenges."
+        }
+      },
+      reasoning_effort: {
+        type: "choice",
+        instructions:
+          "What level of internal reasoning effort is required for this specific task? Note: gpt-0ss-120b and gpt-4.1-mini do not support reasoning (select 'none'). For gpt-5.1-mini select low, medium, or high. For gpt-6-luna select low, medium, high, or max.",
+        criteria: {
+          none: "No reasoning needed (straightforward response or model has no reasoning capability).",
+          low: "Light multi-step thinking or quick validation.",
+          medium: "Moderate problem solving, multi-file code logic, or debugging.",
+          high: "Deep analytical thinking, complex architecture, or tricky edge cases.",
+          max: "Maximum recursive deliberation, formal verification, or extreme difficulty."
+        }
+      }
+    };
 
     try {
-      let parsedQuestions;
-      try {
-        parsedQuestions = JSON.parse(questionsJson);
-      } catch (err: any) {
-        throw new Error("Invalid JSON in Questions Schema: " + err.message);
-      }
-
-      // Try calling our internal API route first (which avoids CORS)
       const res = await fetch("/api/jev", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           apiKey: apiKey.trim(),
           model: "typesafe/jev-1.13",
-          state: stateInput,
-          questions: parsedQuestions,
+          state: modelPrompt.trim(),
+          questions
         }),
       });
 
       const data = await res.json();
-      const elapsed = Math.round(performance.now() - startTime);
-      setExecTimeMs(elapsed);
+      setModelLatencyMs(Math.round(performance.now() - start));
 
       if (!res.ok) {
         throw new Error(data.error || JSON.stringify(data));
       }
 
-      setExecutionResult(data);
+      setModelResult(data);
     } catch (err: any) {
-      setErrorMsg(err.message || "Failed to execute decision");
+      setModelError(err.message || "Failed to select model with JEV");
     } finally {
-      setIsRunning(false);
+      setIsSelectingModel(false);
     }
   };
 
-  const codeSnippets = {
-    fetch: `// Direct fetch call using OpenRouter Decisions API
-const response = await fetch('https://openrouter.ai/api/alpha/decisions', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer ${showKey ? apiKey : "sk-or-v1-..."}',
-    'Content-Type': 'application/json',
-    'HTTP-Referer': 'https://myapp.com', // optional for leaderboard
-    'X-Title': 'Decision Engine'        // optional
-  },
-  body: JSON.stringify({
-    model: 'typesafe/jev-1.13',
-    state: ${JSON.stringify(stateInput)},
-    questions: ${questionsJson}
-  })
-});
+  const handleRoute = async () => {
+    if (!promptInput.trim()) return;
+    setIsRouting(true);
+    setRoutingError(null);
+    setRoutingResult(null);
+    const start = performance.now();
 
-const data = await response.json();
-console.log('Decisions answers:', data.answers);`,
+    const questions = {
+      is_chitchat: {
+        type: "noul",
+        instructions:
+          "Is this prompt simple conversational small talk, greeting, or casual chit-chat that requires NO third-party apps, NO database write, NO memory retrieval, NO web search, NO data analysis, and NO sprint planning?",
+        criteria: {
+          true: "Simple casual chit-chat handled directly by main agent",
+          false: "Requires specialized action, tool, or integration",
+        },
+      },
+      needs_db_write: {
+        type: "noul",
+        instructions:
+          "Does this task explicitly require WRITE access to the application database for CREATION, UPDATION, or DELETION of internal records only? (Do not trigger for read-only queries or checking existing items).",
+        criteria: {
+          true: "Explicit database write, update, or deletion needed",
+          false: "No write/mutation needed",
+        },
+      },
+      needs_memory: {
+        type: "noul",
+        instructions:
+          "Does this task require recalling past user memory, personal context, or saved preferences (e.g. 'do you remember me?', 'what did I say earlier?')?",
+        criteria: {
+          true: "Requires recalling past conversation, user facts, or preferences",
+          false: "No memory recall needed",
+        },
+      },
+      needs_analysis: {
+        type: "noul",
+        instructions:
+          "Does this task require READ access to internal database records, tasks, or issues to compute metrics, analyze progress, or summarize work?",
+        criteria: {
+          true: "Requires reading database to analyze data, metrics, or work summary",
+          false: "No analytical database read needed",
+        },
+      },
+      needs_web: {
+        type: "noul",
+        instructions:
+          "Does this task require live internet search, Google queries, or fetching public internet websites? (Do not trigger for internal queries).",
+        criteria: {
+          true: "Explicit live web browsing or public internet lookup required",
+          false: "No external web search needed",
+        },
+      },
+      needs_mcp: {
+        type: "noul",
+        instructions:
+          "Does the user EXPLICITLY ask for third-party tools or external services (such as Linear, Slack, Sentry, Google Calendar, or MCP servers)? STRICT RULE: Do NOT trigger unless an external third-party tool or service is explicitly requested or mentioned.",
+        criteria: {
+          true: "Explicitly requests third-party app action (Linear, Sentry, Slack, Google Calendar, or MCP tool)",
+          false: "No third-party tool or service explicitly requested",
+        },
+      },
+      needs_sprint: {
+        type: "noul",
+        instructions:
+          "Does this task involve sprints — including checking sprints, viewing sprint status, creating sprints, managing sprints, or sprint planning?",
+        criteria: {
+          true: "Involves sprint viewing, checking, planning, or management",
+          false: "Unrelated to sprints",
+        },
+      },
+    };
 
-    ts: `import { OpenRouter } from "@openrouter/sdk";
+    try {
+      const res = await fetch("/api/jev", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey: apiKey.trim(),
+          model: "typesafe/jev-1.13",
+          state: promptInput.trim(),
+          questions,
+        }),
+      });
 
-const openrouter = new OpenRouter({
-  apiKey: "${showKey ? apiKey : "<OPENROUTER_API_KEY>"}"
-});
+      const data = await res.json();
+      setLatencyMs(Math.round(performance.now() - start));
 
-// The model answers narrow, typed questions about the state.
-const decision = await openrouter.alpha.decisions.create({
-  decisionsRequest: {
-    model: "typesafe/jev-1.13",
-    state: ${JSON.stringify(stateInput)},
-    questions: ${questionsJson}
-  }
-});
+      if (!res.ok) {
+        throw new Error(data.error || JSON.stringify(data));
+      }
 
-const { is_urgent, department, frustration } = decision.answers;
-
-// Automated deterministic workflow execution:
-if (is_urgent?.noul > 0.8 && department?.choice === "billing") {
-  console.log("⚡ Auto-escalating to Billing on-call queue!");
-}`,
-
-    curl: `curl https://openrouter.ai/api/alpha/decisions \\
-  -H "Authorization: Bearer ${showKey ? apiKey : "sk-or-v1-..."}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "typesafe/jev-1.13",
-    "state": "${stateInput.replace(/"/g, '\\"')}",
-    "questions": ${questionsJson.replace(/\n/g, "\n    ")}
-  }'`,
-
-    py: `import requests
-import json
-
-url = "https://openrouter.ai/api/alpha/decisions"
-headers = {
-    "Authorization": f"Bearer ${showKey ? apiKey : 'sk-or-v1-...'}",
-    "Content-Type": "application/json"
-}
-payload = {
-    "model": "typesafe/jev-1.13",
-    "state": ${JSON.stringify(stateInput)},
-    "questions": ${questionsJson}
-}
-
-response = requests.post(url, headers=headers, json=payload)
-data = response.json()
-print("Answers:", data.get("answers"))`,
+      setRoutingResult(data);
+    } catch (err: any) {
+      setRoutingError(err.message || "Failed to route prompt");
+    } finally {
+      setIsRouting(false);
+    }
   };
 
-  const copyCodeToClipboard = () => {
-    navigator.clipboard.writeText(codeSnippets[activeCodeTab]);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
+  // Evaluate JEV decisions
+  const getDecision = () => {
+    if (!routingResult?.answers) return null;
+    const ans = routingResult.answers;
+    const chitchatScore = ans.is_chitchat?.noul ?? 0;
+
+    const scores = SUB_AGENTS.map((agent) => {
+      const score = ans[agent.questionKey]?.noul ?? 0;
+      return {
+        ...agent,
+        score,
+        pct: (score * 100).toFixed(1),
+      };
+    });
+
+    scores.sort((a, b) => b.score - a.score);
+    const topScore = scores[0]?.score ?? 0;
+    const isChitChat = chitchatScore > 0.65 && topScore < 0.50;
+
+    let selected: typeof scores = [];
+    if (!isChitChat) {
+      // Rule 1: No limit to agent selection. Just don't select if below 50% (0.50)!
+      selected = scores.filter((s) => s.score >= 0.50);
+    }
+
+    return {
+      isChitChat,
+      chitchatScore: (chitchatScore * 100).toFixed(1),
+      scores,
+      selected,
+    };
   };
+
+  const decision = getDecision();
 
   return (
-    <div className="min-h-screen bg-[#08090d] text-[#e0e4ec] font-sans antialiased selection:bg-cyan-500/30 selection:text-cyan-200">
-      {/* Background ambient glow */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute -top-40 left-1/4 w-[600px] h-[500px] bg-cyan-600/10 rounded-full blur-[130px]" />
-        <div className="absolute top-1/3 -right-20 w-[550px] h-[500px] bg-indigo-600/10 rounded-full blur-[140px]" />
-        <div className="absolute bottom-10 left-10 w-[450px] h-[450px] bg-emerald-600/10 rounded-full blur-[120px]" />
-      </div>
-
-      <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-10">
-        {/* Navigation Bar */}
-        <header className="flex items-center justify-between pb-8 mb-8 border-b border-[#1b1e28]">
-          <div className="flex items-center gap-3">
-            <Link
-              href="/"
-              className="text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#12141c] border border-zinc-800 hover:border-zinc-700"
-            >
-              <span>←</span>
-              <span>Back to Home</span>
-            </Link>
-            <span className="text-zinc-600">/</span>
-            <span className="font-mono text-xs uppercase tracking-wider text-cyan-400 font-semibold bg-cyan-950/60 border border-cyan-800/60 px-2.5 py-1 rounded-md">
-              System One · Decisions API
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono text-zinc-400">Model:</span>
-            <code className="text-xs font-mono bg-[#141724] text-cyan-300 px-2.5 py-1 rounded border border-cyan-900/50">
+    <div className="min-h-screen bg-[#090a0d] text-[#d6d9e0] font-sans antialiased selection:bg-cyan-500/20 selection:text-cyan-200">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+        
+        {/* Navigation Header */}
+        <header className="flex items-center justify-between pb-6 mb-8 border-b border-[#1b1d24]">
+          <Link
+            href="/"
+            className="text-xs font-mono text-zinc-400 hover:text-zinc-200 flex items-center gap-1.5 transition-colors"
+          >
+            <span>←</span>
+            <span>Home</span>
+          </Link>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono text-zinc-500">Model:</span>
+            <code className="text-xs font-mono text-cyan-400 bg-[#12141c] px-2 py-0.5 rounded border border-zinc-800">
               typesafe/jev-1.13
             </code>
           </div>
         </header>
 
-        {/* Hero Section */}
-        <div className="mb-14">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gradient-to-r from-cyan-950/70 to-indigo-950/70 border border-cyan-500/30 text-cyan-300 text-xs font-mono mb-4">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-            Typesafe System One Decision Model
+        {/* Top Header: JEV - by Typesafe AI */}
+        <div className="mb-8">
+          <div className="text-xs font-mono uppercase tracking-wider text-cyan-400 font-semibold mb-1">
+            Typesafe AI
           </div>
-          <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-white mb-4">
-            JEV USE CASE
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-2">
+            JEV
           </h1>
-          <p className="text-lg text-zinc-300 max-w-3xl leading-relaxed">
-            Fast, deterministic, and calibrated probabilistic decisions on arbitrary state. 
-            Unlike generative LLMs that output unpredictable text tokens, <span className="text-cyan-300 font-semibold">JEV (typesafe/jev-1.13)</span> answers 
-            narrow, typed questions about a state with calibrated mathematical probabilities.
+          <p className="text-sm text-zinc-400 max-w-2xl leading-relaxed">
+            Fast, calibrated decision model. Unlike generative LLMs that generate arbitrary sentences, JEV answers typed questions about arbitrary state with calibrated mathematical probabilities (noul, choice, score).
           </p>
         </div>
 
-        {/* Section 1: What is JEV */}
-        <section className="mb-14">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 font-mono font-bold text-sm">
-              01
-            </div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">
-              What is JEV?
-            </h2>
-          </div>
+        {/* Tab Toggle: Test It vs Learn More */}
+        <div className="flex items-center gap-2 p-1 rounded-lg bg-[#11131a] border border-[#1d202a] w-fit mb-8 text-xs font-mono">
+          <button
+            onClick={() => setActiveTab("orchestrator")}
+            className={`px-4 py-2 rounded-md transition-colors ${
+              activeTab === "orchestrator"
+                ? "bg-cyan-950/80 text-cyan-300 font-semibold border border-cyan-800/80"
+                : "text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            ⚡ Test Multi-Agent Router
+          </button>
+          <button
+            onClick={() => setActiveTab("learn")}
+            className={`px-4 py-2 rounded-md transition-colors ${
+              activeTab === "learn"
+                ? "bg-cyan-950/80 text-cyan-300 font-semibold border border-cyan-800/80"
+                : "text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            📖 About JEV &amp; How to Use
+          </button>
+        </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-            {/* Card 1: Not Text Generation */}
-            <div className="p-5 rounded-xl bg-[#0f1118] border border-[#1d2232] shadow-lg relative overflow-hidden group hover:border-cyan-500/40 transition-all">
-              <div className="w-10 h-10 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center text-lg mb-4">
-                ⚡
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-2">
-                Not a Text Generator
-              </h3>
-              <p className="text-sm text-zinc-400 leading-relaxed">
-                JEV does <strong className="text-zinc-200">not</strong> generate freeform sentences or chat replies. It answers strict, typed questions about an input state (a string, object, or array) through OpenRouter&apos;s <code className="text-cyan-300 font-mono text-xs">/api/alpha/decisions</code> endpoint.
-              </p>
-            </div>
-
-            {/* Card 2: Calibrated Probabilities */}
-            <div className="p-5 rounded-xl bg-[#0f1118] border border-[#1d2232] shadow-lg relative overflow-hidden group hover:border-cyan-500/40 transition-all">
-              <div className="w-10 h-10 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center text-lg mb-4">
-                🎯
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-2">
-                Calibrated Probabilities
-              </h3>
-              <p className="text-sm text-zinc-400 leading-relaxed">
-                Returns true mathematical confidence distributions rather than arbitrary text guesses. Perfect for threshold-based branching (e.g. <code className="text-cyan-300 font-mono text-xs">is_urgent &gt; 0.85</code>).
-              </p>
-            </div>
-
-            {/* Card 3: Code Owns Workflow */}
-            <div className="p-5 rounded-xl bg-[#0f1118] border border-[#1d2232] shadow-lg relative overflow-hidden group hover:border-cyan-500/40 transition-all">
-              <div className="w-10 h-10 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center text-lg mb-4">
-                🛠️
-              </div>
-              <h3 className="text-lg font-semibold text-white mb-2">
-                Your Code Owns the Flow
-              </h3>
-              <p className="text-sm text-zinc-400 leading-relaxed">
-                Ideal for deterministic tasks: automated routing, triage, ranking, content verification, compliance checks, and intent classification without fragile prompt parsing.
-              </p>
-            </div>
-          </div>
-
-          {/* 3 Primitives explanation */}
-          <div className="p-6 rounded-xl bg-[#0d0f16] border border-[#1f2436]">
-            <h3 className="text-base font-semibold text-white mb-3 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-cyan-400" />
-              The 3 Decision Primitive Types in JEV:
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
-              <div className="p-3.5 rounded-lg bg-[#131622] border border-zinc-800">
-                <span className="text-emerald-400 font-bold text-sm block mb-1">
-                  1. type: &quot;noul&quot;
+        {/* TAB 1: Multi-Agent Orchestrator (Testing Real Scenario) */}
+        {activeTab === "orchestrator" && (
+          <div className="space-y-8">
+            
+            {/* Minimal Agent Topology Grid */}
+            <div className="p-5 rounded-xl bg-[#0d0e14] border border-[#1a1d26] space-y-4">
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="font-semibold text-zinc-200 uppercase tracking-wide">
+                  Agent Topology
                 </span>
-                <p className="text-zinc-300 font-sans mb-2">
-                  Binary yes/no calibrated probability from 0.0 to 1.0.
-                </p>
-                <div className="text-zinc-400">
-                  <span className="text-zinc-500">e.g.</span> is_urgent: 0.94
+                <span className="text-zinc-500">1 Main Agent + 6 Sub-Agents</span>
+              </div>
+
+              {/* Main Agent Bar */}
+              <div className="p-3 rounded-lg bg-[#12141c] border border-zinc-800 flex items-center justify-between">
+                <div>
+                  <span className="font-mono text-xs font-bold text-white mr-2">main_agent</span>
+                  <span className="text-xs text-zinc-400">
+                    Talks to user directly. If prompt is simple chit-chat, handles it with 0 sub-agents.
+                  </span>
                 </div>
+                <span className="text-[11px] font-mono text-emerald-400">Active</span>
               </div>
 
-              <div className="p-3.5 rounded-lg bg-[#131622] border border-zinc-800">
-                <span className="text-cyan-400 font-bold text-sm block mb-1">
-                  2. type: &quot;choice&quot;
-                </span>
-                <p className="text-zinc-300 font-sans mb-2">
-                  Pick from custom named options with full probability distribution.
-                </p>
-                <div className="text-zinc-400">
-                  <span className="text-zinc-500">e.g.</span> billing (82%), tech (14%), sales (4%)
-                </div>
-              </div>
+              {/* 6 Sub-Agents Cards (Clean, Few Colors) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {SUB_AGENTS.map((agent) => {
+                  const isPicked = decision?.selected.some((s) => s.id === agent.id);
+                  const agentScore = decision?.scores.find((s) => s.id === agent.id);
 
-              <div className="p-3.5 rounded-lg bg-[#131622] border border-zinc-800">
-                <span className="text-purple-400 font-bold text-sm block mb-1">
-                  3. type: &quot;score&quot;
-                </span>
-                <p className="text-zinc-300 font-sans mb-2">
-                  Ordinal rank or position across an ordered rubric list.
-                </p>
-                <div className="text-zinc-400">
-                  <span className="text-zinc-500">e.g.</span> [&quot;Calm&quot;, &quot;Frustrated&quot;, &quot;Very angry&quot;]
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+                  return (
+                    <div
+                      key={agent.id}
+                      className={`p-3.5 rounded-lg transition-all ${
+                        isPicked
+                          ? "bg-[#141824] border border-cyan-500 text-white"
+                          : "bg-[#11131a] border border-zinc-800/80 text-zinc-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-mono text-xs font-bold text-zinc-100">
+                          {agent.name}
+                        </span>
+                        {isPicked && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-700 text-cyan-300">
+                            Selected
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] font-mono text-zinc-400 mb-1.5">
+                        {agent.role}
+                      </div>
+                      <p className="text-xs text-zinc-400 leading-normal mb-2">
+                        {agent.description}
+                      </p>
 
-        {/* Section 2: Usage of Code */}
-        <section className="mb-14">
-          <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-mono font-bold text-sm">
-                02
-              </div>
-              <h2 className="text-2xl font-bold text-white tracking-tight">
-                Usage of code !!
-              </h2>
-            </div>
-
-            {/* Language Tabs */}
-            <div className="flex items-center gap-1.5 p-1 rounded-lg bg-[#12141e] border border-zinc-800 text-xs font-mono">
-              {(["fetch", "ts", "curl", "py"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveCodeTab(tab)}
-                  className={`px-3 py-1.5 rounded transition-colors ${
-                    activeCodeTab === tab
-                      ? "bg-cyan-500/20 text-cyan-300 font-semibold border border-cyan-500/40"
-                      : "text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  {tab === "fetch"
-                    ? "JavaScript (fetch)"
-                    : tab === "ts"
-                    ? "TypeScript SDK"
-                    : tab === "curl"
-                    ? "cURL"
-                    : "Python"}
-                </button>
-              ))}
-              <button
-                onClick={copyCodeToClipboard}
-                className="ml-2 px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-sans font-medium flex items-center gap-1 transition-all"
-                title="Copy code"
-              >
-                {copiedCode ? "✓ Copied" : "Copy"}
-              </button>
-            </div>
-          </div>
-
-          <div className="relative rounded-xl overflow-hidden border border-[#1e2333] bg-[#0b0d14] shadow-2xl">
-            <div className="flex items-center justify-between px-4 py-2.5 bg-[#10131d] border-b border-[#1b1f2e] text-xs font-mono text-zinc-400">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
-                <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
-                <span className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
-                <span className="ml-2 text-zinc-500">
-                  {activeCodeTab === "fetch"
-                    ? "decision-call.js"
-                    : activeCodeTab === "ts"
-                    ? "decision-sdk.ts"
-                    : activeCodeTab === "curl"
-                    ? "request.sh"
-                    : "decision_script.py"}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowKey(!showKey)}
-                  className="text-[11px] text-zinc-400 hover:text-cyan-300 underline"
-                >
-                  {showKey ? "Hide API Key" : "Reveal API Key in Code"}
-                </button>
-              </div>
-            </div>
-            <pre className="p-5 text-xs sm:text-sm font-mono overflow-x-auto text-zinc-300 leading-relaxed">
-              <code>{codeSnippets[activeCodeTab]}</code>
-            </pre>
-          </div>
-        </section>
-
-        {/* Section 3: Interactive Live Execution */}
-        <section className="mb-14">
-          <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-mono font-bold text-sm">
-                03
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">
-                  Allow me to run by calling JEV !!
-                </h2>
-                <p className="text-xs text-zinc-400 font-mono mt-0.5">
-                  Live playground hitting OpenRouter alpha decisions endpoint
-                </p>
+                      {agentScore && (
+                        <div className="pt-2 border-t border-zinc-800">
+                          <div className="flex justify-between text-[11px] font-mono text-zinc-400 mb-1">
+                            <span>Confidence:</span>
+                            <span className={isPicked ? "text-cyan-300 font-bold" : "text-zinc-400"}>
+                              {agentScore.pct}%
+                            </span>
+                          </div>
+                          <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full ${isPicked ? "bg-cyan-400" : "bg-zinc-600"}`}
+                              style={{ width: `${agentScore.pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Presets */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-zinc-400 font-mono">Preset:</span>
-              {PRESETS.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => applyPreset(p)}
-                  className={`px-3 py-1 text-xs rounded-md font-mono transition-all ${
-                    selectedPreset.id === p.id
-                      ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/50"
-                      : "bg-[#141724] text-zinc-400 border border-zinc-800 hover:border-zinc-700"
-                  }`}
-                >
-                  {p.title}
-                </button>
-              ))}
-            </div>
-          </div>
+            {/* Prompt Textarea & Dispatch Action */}
+            <div className="p-5 rounded-xl bg-[#0d0e14] border border-[#1a1d26] space-y-4">
+              <label className="block text-xs font-mono font-semibold text-zinc-200">
+                Write any prompt in textarea:
+              </label>
 
-          <div className="p-6 rounded-2xl bg-[#0c0e17] border border-[#1b2030] shadow-2xl space-y-6">
-            {/* Top configuration row */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-mono text-zinc-300 mb-1.5 flex items-center justify-between">
-                  <span>OpenRouter API Key:</span>
+              {/* Sample Prompts */}
+              <div className="flex flex-wrap gap-1.5">
+                {PROMPT_SAMPLES.map((s, idx) => (
                   <button
-                    onClick={() => setShowKey(!showKey)}
-                    className="text-[11px] text-cyan-400 hover:underline"
+                    key={idx}
+                    onClick={() => setPromptInput(s.prompt)}
+                    className="px-2.5 py-1 text-xs font-mono rounded bg-[#13151f] border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
                   >
-                    {showKey ? "Mask Key" : "Show Key"}
+                    {s.label}
                   </button>
-                </label>
+                ))}
+              </div>
+
+              <textarea
+                value={promptInput}
+                onChange={(e) => setPromptInput(e.target.value)}
+                rows={3}
+                placeholder="Write your prompt here to test JEV routing accuracy..."
+                className="w-full p-3 text-sm bg-[#11131a] border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-cyan-500 transition-colors font-sans"
+              />
+
+              <div className="flex items-center justify-between pt-2 border-t border-zinc-800/80 flex-wrap gap-3">
+                <button
+                  onClick={handleRoute}
+                  disabled={isRouting || !promptInput.trim()}
+                  className={`px-6 py-2.5 rounded-lg text-xs font-mono font-semibold transition-all ${
+                    isRouting
+                      ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                      : "bg-cyan-500 hover:bg-cyan-400 text-black active:scale-95"
+                  }`}
+                >
+                  {isRouting ? "Evaluating with JEV..." : "Route Prompt with JEV"}
+                </button>
+
+                {latencyMs !== null && !isRouting && (
+                  <span className="text-xs font-mono text-zinc-400">
+                    Latency: <span className="text-cyan-300 font-bold">{latencyMs}ms</span>
+                  </span>
+                )}
+              </div>
+
+              {routingError && (
+                <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/80 text-red-200 text-xs font-mono">
+                  Error: {routingError}
+                </div>
+              )}
+
+              {/* Routing Verdict Display */}
+              {decision && (
+                <div className="pt-4 border-t border-zinc-800 space-y-3">
+                  <div className="text-xs font-mono text-zinc-400">Routing Decision:</div>
+
+                  {decision.isChitChat ? (
+                    <div className="p-4 rounded-lg bg-[#11141e] border border-zinc-700">
+                      <div className="text-sm font-bold text-white font-mono mb-1">
+                        💬 Handled by main_agent directly
+                      </div>
+                      <p className="text-xs text-zinc-400">
+                        Classified as simple conversational chit-chat ({decision.chitchatScore}%). No sub-agents needed.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-4 rounded-lg bg-[#11141e] border border-cyan-800/80 space-y-2">
+                      <div className="flex items-center justify-between text-xs font-mono">
+                        <span className="text-sm font-bold text-cyan-300">
+                          ⚡ Dispatched {decision.selected.length} Sub-Agent(s) in Parallel:
+                        </span>
+                        <span className="text-zinc-500">&ge; 50% threshold</span>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {decision.selected.map((ag) => (
+                          <div
+                            key={ag.id}
+                            className="px-3 py-1.5 rounded bg-cyan-950 border border-cyan-700 text-xs font-mono text-cyan-200 flex items-center gap-2"
+                          >
+                            <span className="font-bold">{ag.name}</span>
+                            <span className="text-zinc-400">({ag.pct}%)</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <p className="text-xs text-zinc-400 font-mono pt-1">
+                        Workflow: main_agent dispatched tasks to [{decision.selected.map((s) => s.name).join(", ")}] in parallel.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Raw Probabilities Accordion */}
+                  <details className="text-xs font-mono text-zinc-500 pt-1">
+                    <summary className="cursor-pointer hover:text-zinc-300">
+                      View all calibrated probabilities
+                    </summary>
+                    <div className="p-3 mt-2 rounded bg-black/40 border border-zinc-800 text-zinc-400 space-y-1">
+                      <div>is_chitchat: {decision.chitchatScore}%</div>
+                      {decision.scores.map((s) => (
+                        <div key={s.id}>
+                          {s.name}: {s.pct}%
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
+
+            {/* USE CASE 2: Model Selection & Reasoning Selection */}
+            <div className="p-5 rounded-xl bg-[#0d0e14] border border-[#1a1d26] space-y-5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <div className="text-xs font-mono uppercase tracking-wider text-cyan-400 font-semibold mb-0.5">
+                    Use Case 02 · Dynamic Model Routing
+                  </div>
+                  <h3 className="text-base font-bold text-white font-mono">
+                    Model Selection &amp; Reasoning Effort Selection
+                  </h3>
+                </div>
+                <span className="text-[11px] font-mono text-zinc-500">
+                  Selects exactly 1 model + 1 reasoning level
+                </span>
+              </div>
+
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                JEV analyzes task complexity and picks the optimal model and calibrated reasoning effort:
+              </p>
+
+              {/* Supported Models Overview */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs font-mono">
+                <div className={`p-3 rounded-lg border transition-all ${
+                  modelResult?.answers?.selected_model?.choice === "gpt-0ss-120b"
+                    ? "bg-[#141824] border-cyan-400 text-white"
+                    : "bg-[#11131a] border-zinc-800 text-zinc-400"
+                }`}>
+                  <div className="font-bold text-zinc-200">gpt-0ss-120b</div>
+                  <div className="text-[11px] text-zinc-500 mt-1">Reasoning: none</div>
+                  <div className="text-[10px] text-zinc-400 mt-1">Fast, basic, low complexity</div>
+                </div>
+
+                <div className={`p-3 rounded-lg border transition-all ${
+                  modelResult?.answers?.selected_model?.choice === "gpt-4.1-mini"
+                    ? "bg-[#141824] border-cyan-400 text-white"
+                    : "bg-[#11131a] border-zinc-800 text-zinc-400"
+                }`}>
+                  <div className="font-bold text-zinc-200">gpt-4.1-mini</div>
+                  <div className="text-[11px] text-zinc-500 mt-1">Reasoning: none</div>
+                  <div className="text-[10px] text-zinc-400 mt-1">Routine tasks, day-to-day code</div>
+                </div>
+
+                <div className={`p-3 rounded-lg border transition-all ${
+                  modelResult?.answers?.selected_model?.choice === "gpt-5.1-mini"
+                    ? "bg-[#141824] border-cyan-400 text-white"
+                    : "bg-[#11131a] border-zinc-800 text-zinc-400"
+                }`}>
+                  <div className="font-bold text-zinc-200">gpt-5.1-mini</div>
+                  <div className="text-[11px] text-cyan-400 mt-1">Reasoning: low, med, high</div>
+                  <div className="text-[10px] text-zinc-400 mt-1">Moderate to high complexity</div>
+                </div>
+
+                <div className={`p-3 rounded-lg border transition-all ${
+                  modelResult?.answers?.selected_model?.choice === "gpt-6-luna"
+                    ? "bg-[#141824] border-cyan-400 text-white"
+                    : "bg-[#11131a] border-zinc-800 text-zinc-400"
+                }`}>
+                  <div className="font-bold text-zinc-200">gpt-6-luna</div>
+                  <div className="text-[11px] text-cyan-400 mt-1">Reasoning: low, med, high, max</div>
+                  <div className="text-[10px] text-zinc-400 mt-1">Hardest frontier problems</div>
+                </div>
+              </div>
+
+              {/* Sample Task Scenarios */}
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-mono text-zinc-400">
+                  Quick Scenario Presets (click to test):
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    onClick={() => setModelPrompt("Convert this markdown table to HTML and fix typos.")}
+                    className="px-2.5 py-1 text-xs font-mono rounded bg-[#13151f] border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                  >
+                    Simple Formatting (gpt-0ss-120b)
+                  </button>
+                  <button
+                    onClick={() => setModelPrompt("Write a standard Python script to parse CSV files and remove duplicate rows.")}
+                    className="px-2.5 py-1 text-xs font-mono rounded bg-[#13151f] border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                  >
+                    Routine Code (gpt-4.1-mini)
+                  </button>
+                  <button
+                    onClick={() => setModelPrompt("Refactor an authentication microservice to handle multi-tenant JWT token rotation with Redis session revocation and edge-case testing.")}
+                    className="px-2.5 py-1 text-xs font-mono rounded bg-[#13151f] border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                  >
+                    Moderate Complexity (gpt-5.1-mini)
+                  </button>
+                  <button
+                    onClick={() => setModelPrompt("Design and optimize an end-to-end distributed transaction consensus protocol with formal mathematical proofs, fault-tolerance edge cases, and deadlock prevention under Byzantine failures.")}
+                    className="px-2.5 py-1 text-xs font-mono rounded bg-[#13151f] border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                  >
+                    Extreme Difficulty (gpt-6-luna)
+                  </button>
+                </div>
+              </div>
+
+              {/* Textarea */}
+              <textarea
+                value={modelPrompt}
+                onChange={(e) => setModelPrompt(e.target.value)}
+                rows={3}
+                placeholder="Describe your task scenario here to let JEV select the best model & reasoning effort..."
+                className="w-full p-3 text-sm bg-[#11131a] border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-cyan-500 transition-colors font-sans"
+              />
+
+              {/* Action Button */}
+              <div className="flex items-center justify-between pt-2 border-t border-zinc-800/80 flex-wrap gap-3">
+                <button
+                  onClick={handleSelectModel}
+                  disabled={isSelectingModel || !modelPrompt.trim()}
+                  className={`px-6 py-2.5 rounded-lg text-xs font-mono font-semibold transition-all ${
+                    isSelectingModel
+                      ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                      : "bg-cyan-500 hover:bg-cyan-400 text-black active:scale-95"
+                  }`}
+                >
+                  {isSelectingModel ? "JEV Selecting Model & Reasoning..." : "Select Model & Reasoning with JEV"}
+                </button>
+
+                {modelLatencyMs !== null && !isSelectingModel && (
+                  <span className="text-xs font-mono text-zinc-400">
+                    Latency: <span className="text-cyan-300 font-bold">{modelLatencyMs}ms</span>
+                  </span>
+                )}
+              </div>
+
+              {modelError && (
+                <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/80 text-red-200 text-xs font-mono">
+                  Error: {modelError}
+                </div>
+              )}
+
+              {/* Selection Result Display */}
+              {modelResult?.answers && (
+                <div className="pt-4 border-t border-zinc-800 space-y-3">
+                  <div className="text-xs font-mono text-zinc-400">JEV Model Routing Decision:</div>
+
+                  <div className="p-4 rounded-lg bg-[#11141e] border border-cyan-800/80 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Selected Model */}
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-mono text-zinc-400">Selected Model:</div>
+                      <div className="text-base font-bold text-white font-mono">
+                        🎯 {modelResult.answers.selected_model?.choice || "N/A"}
+                      </div>
+                      {modelResult.answers.selected_model?.probabilities && (
+                        <div className="text-[11px] font-mono text-cyan-300">
+                          Confidence:{" "}
+                          {(
+                            (modelResult.answers.selected_model.probabilities[
+                              modelResult.answers.selected_model.choice
+                            ] || 0) * 100
+                          ).toFixed(1)}
+                          %
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Selected Reasoning Effort */}
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-mono text-zinc-400">Reasoning Effort:</div>
+                      <div className="text-base font-bold text-cyan-300 font-mono uppercase">
+                        🧠 {modelResult.answers.reasoning_effort?.choice || "none"}
+                      </div>
+                      {modelResult.answers.reasoning_effort?.probabilities && (
+                        <div className="text-[11px] font-mono text-zinc-400">
+                          Confidence:{" "}
+                          {(
+                            (modelResult.answers.reasoning_effort.probabilities[
+                              modelResult.answers.reasoning_effort.choice
+                            ] || 0) * 100
+                          ).toFixed(1)}
+                          %
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Probabilities Breakdown */}
+                  <details className="text-xs font-mono text-zinc-500 pt-1">
+                    <summary className="cursor-pointer hover:text-zinc-300">
+                      View all model candidate probabilities
+                    </summary>
+                    <div className="p-3 mt-2 rounded bg-black/40 border border-zinc-800 text-zinc-400 space-y-2">
+                      <div>
+                        <div className="font-bold text-zinc-300 mb-1">Model Distribution:</div>
+                        {modelResult.answers.selected_model?.probabilities &&
+                          Object.entries(modelResult.answers.selected_model.probabilities).map(([m, p]) => (
+                            <div key={m} className="flex justify-between">
+                              <span>{m}</span>
+                              <span className="text-cyan-300">{(Number(p) * 100).toFixed(1)}%</span>
+                            </div>
+                          ))}
+                      </div>
+                      <div className="pt-2 border-t border-zinc-800">
+                        <div className="font-bold text-zinc-300 mb-1">Reasoning Distribution:</div>
+                        {modelResult.answers.reasoning_effort?.probabilities &&
+                          Object.entries(modelResult.answers.reasoning_effort.probabilities).map(([r, p]) => (
+                            <div key={r} className="flex justify-between">
+                              <span>{r}</span>
+                              <span className="text-cyan-300">{(Number(p) * 100).toFixed(1)}%</span>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
+
+            {/* Optional Key Configuration (Subtle & Minimal) */}
+            <div className="p-3 rounded-lg bg-[#0d0e14] border border-zinc-800/80 flex items-center justify-between text-xs font-mono text-zinc-500">
+              <div className="flex items-center gap-2">
+                <span>API Key:</span>
                 <input
                   type={showKey ? "text" : "password"}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  className="w-full px-3 py-2 text-xs font-mono bg-[#121522] border border-zinc-800 rounded-lg text-zinc-200 focus:outline-none focus:border-cyan-500 transition-colors"
-                  placeholder="sk-or-v1-... (or configured via OPENROUTER_API_KEY in .env.local)"
+                  placeholder="Loaded automatically from .env"
+                  className="bg-[#12141c] border border-zinc-800 px-2 py-0.5 rounded text-zinc-300 w-64 focus:outline-none focus:border-cyan-500"
                 />
-              </div>
-
-              <div>
-                <label className="block text-xs font-mono text-zinc-300 mb-1.5">
-                  Endpoint &amp; Model Target:
-                </label>
-                <div className="flex items-center gap-2">
-                  <div className="px-3 py-2 text-xs font-mono bg-[#121522] border border-zinc-800 rounded-lg text-cyan-400 flex-1 truncate">
-                    https://openrouter.ai/api/alpha/decisions
-                  </div>
-                  <div className="px-3 py-2 text-xs font-mono bg-cyan-950/60 border border-cyan-800/80 rounded-lg text-cyan-300 whitespace-nowrap">
-                    typesafe/jev-1.13
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Input State Box */}
-            <div>
-              <label className="block text-xs font-mono text-zinc-300 mb-1.5 flex items-center justify-between">
-                <span>Input State (Text / Object / Ticket):</span>
-                <span className="text-[11px] text-zinc-500 font-mono">
-                  {stateInput.length} chars
-                </span>
-              </label>
-              <textarea
-                value={stateInput}
-                onChange={(e) => setStateInput(e.target.value)}
-                rows={3}
-                className="w-full p-3 text-sm font-sans bg-[#121522] border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-cyan-500 transition-colors"
-                placeholder="Enter customer message or state to classify..."
-              />
-            </div>
-
-            {/* Questions JSON Schema */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-mono text-zinc-300">
-                  Questions Definition (JSON Schema):
-                </label>
-                <span className="text-[11px] text-zinc-500 font-mono">
-                  noul, choice, score
-                </span>
-              </div>
-              <textarea
-                value={questionsJson}
-                onChange={(e) => setQuestionsJson(e.target.value)}
-                rows={9}
-                className="w-full p-3 text-xs font-mono bg-[#10121d] border border-zinc-800 rounded-lg text-cyan-200 focus:outline-none focus:border-cyan-500 transition-colors leading-relaxed"
-              />
-            </div>
-
-            {/* Run Button & Status */}
-            <div className="flex items-center justify-between pt-2 border-t border-zinc-800 flex-wrap gap-4">
-              <div className="flex items-center gap-3">
                 <button
-                  onClick={handleRunDecision}
-                  disabled={isRunning || !stateInput.trim()}
-                  className={`px-6 py-3 rounded-xl font-bold text-sm tracking-wide transition-all shadow-lg flex items-center gap-2.5 ${
-                    isRunning
-                      ? "bg-zinc-700 text-zinc-400 cursor-not-allowed"
-                      : "bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white shadow-cyan-500/20 active:scale-95"
-                  }`}
+                  onClick={() => setShowKey(!showKey)}
+                  className="text-zinc-400 hover:text-cyan-300 underline"
                 >
-                  {isRunning ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      <span>Calling JEV (Decisions API)...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>▶</span>
-                      <span>Run JEV Decision</span>
-                    </>
-                  )}
+                  {showKey ? "Hide" : "Show"}
                 </button>
-
-                {execTimeMs !== null && !isRunning && (
-                  <span className="text-xs font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/60 px-2.5 py-1 rounded">
-                    ⚡ {execTimeMs}ms latency
-                  </span>
-                )}
               </div>
+              <span>OpenRouter Decisions API</span>
+            </div>
+          </div>
+        )}
 
-              <div className="text-xs text-zinc-400 font-mono">
-                Model executes on OpenRouter alpha decisions
+        {/* TAB 2: About JEV & How to Use */}
+        {activeTab === "learn" && (
+          <div className="space-y-8">
+            
+            {/* What is JEV Section */}
+            <div className="p-5 rounded-xl bg-[#0d0e14] border border-[#1a1d26] space-y-4">
+              <h2 className="text-base font-bold text-white font-mono uppercase tracking-wide">
+                What is JEV (typesafe/jev-1.13)?
+              </h2>
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                JEV is a <strong>System One Decision Model</strong> available on OpenRouter via the <code className="text-cyan-400">/api/alpha/decisions</code> endpoint.
+                Unlike traditional generative LLMs (like GPT-4 or Claude) that stream freeform text, JEV answers typed questions about arbitrary state (strings, objects, or arrays) and returns <strong>calibrated probabilities</strong>.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs font-mono">
+                <div className="p-3 rounded-lg bg-[#11131a] border border-zinc-800">
+                  <span className="text-cyan-300 font-bold block mb-1">1. noul</span>
+                  <p className="text-zinc-400 font-sans">
+                    Calibrated binary probability from 0.0 to 1.0. Used for threshold checks.
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg bg-[#11131a] border border-zinc-800">
+                  <span className="text-cyan-300 font-bold block mb-1">2. choice</span>
+                  <p className="text-zinc-400 font-sans">
+                    Pick from user-defined categories with normalized probability distributions.
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg bg-[#11131a] border border-zinc-800">
+                  <span className="text-cyan-300 font-bold block mb-1">3. score</span>
+                  <p className="text-zinc-400 font-sans">
+                    Ordinal position along an ordered rubric list.
+                  </p>
+                </div>
               </div>
             </div>
 
-            {/* Error Display */}
-            {errorMsg && (
-              <div className="p-4 rounded-xl bg-red-950/40 border border-red-800/80 text-red-200 text-xs font-mono">
-                <div className="font-bold text-red-300 mb-1 flex items-center gap-1.5">
-                  <span>⚠️</span> Execution Error:
-                </div>
-                <p className="whitespace-pre-wrap">{errorMsg}</p>
-              </div>
-            )}
+            {/* How to Use Code Section */}
+            <div className="p-5 rounded-xl bg-[#0d0e14] border border-[#1a1d26] space-y-4">
+              <h2 className="text-base font-bold text-white font-mono uppercase tracking-wide">
+                How to Use in Code
+              </h2>
+              <p className="text-xs text-zinc-400">
+                Call OpenRouter&apos;s <code className="text-cyan-400 font-mono">/api/alpha/decisions</code> endpoint with model <code className="text-cyan-400 font-mono">typesafe/jev-1.13</code>:
+              </p>
 
-            {/* Results Display */}
-            {executionResult && (
-              <div className="pt-4 border-t border-[#1d2334] space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                    JEV Decision Output
-                  </h3>
-                  <span className="text-xs font-mono text-zinc-400">
-                    ID: {executionResult.id || "decision_call"}
-                  </span>
-                </div>
+              <pre className="p-4 rounded-lg bg-[#08090d] border border-zinc-800 text-xs font-mono text-zinc-300 overflow-x-auto leading-relaxed">
+                <code>{`// Example: JEV Decision Request
+const response = await fetch('https://openrouter.ai/api/alpha/decisions', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer ' + process.env.OPENROUTER_API_KEY,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    model: 'typesafe/jev-1.13',
+    state: 'Create a Linear issue for auth bug and post in Slack',
+    questions: {
+      needs_mcp: {
+        type: 'noul',
+        instructions: 'Does this task require third-party tools like Linear, Slack, or Sentry?',
+        criteria: {
+          true: 'Requires third-party app action',
+          false: 'No tools needed'
+        }
+      }
+    }
+  })
+});
 
-                {/* Structured Answers Cards */}
-                {executionResult.answers && (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {Object.entries(executionResult.answers as DecisionAnswers).map(
-                      ([key, ans]) => {
-                        return (
-                          <div
-                            key={key}
-                            className="p-4 rounded-xl bg-[#111420] border border-[#21273c] shadow-md flex flex-col justify-between"
-                          >
-                            <div>
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="font-mono text-xs uppercase font-bold text-cyan-300">
-                                  {key}
-                                </span>
-                                <span className="text-[10px] font-mono uppercase bg-zinc-800 text-zinc-300 px-2 py-0.5 rounded">
-                                  {ans.type}
-                                </span>
-                              </div>
-
-                              {/* Rendering NOUL */}
-                              {ans.type === "noul" && (
-                                <div className="mt-2 space-y-2">
-                                  <div className="flex items-baseline justify-between">
-                                    <span className="text-xs text-zinc-400">
-                                      Probability (Yes):
-                                    </span>
-                                    <span className="text-xl font-mono font-extrabold text-emerald-400">
-                                      {typeof ans.noul === "number"
-                                        ? `${(ans.noul * 100).toFixed(1)}%`
-                                        : "N/A"}
-                                    </span>
-                                  </div>
-                                  {/* Progress bar */}
-                                  <div className="w-full h-2.5 bg-zinc-800 rounded-full overflow-hidden">
-                                    <div
-                                      className={`h-full transition-all duration-500 ${
-                                        (ans.noul ?? 0) > 0.7
-                                          ? "bg-emerald-500"
-                                          : (ans.noul ?? 0) > 0.3
-                                          ? "bg-amber-500"
-                                          : "bg-zinc-600"
-                                      }`}
-                                      style={{
-                                        width: `${Math.min(
-                                          100,
-                                          Math.max(0, (ans.noul ?? 0) * 100)
-                                        )}%`,
-                                      }}
-                                    />
-                                  </div>
-                                  <div className="text-[11px] text-zinc-400 flex justify-between font-mono">
-                                    <span>False (0%)</span>
-                                    <span>True (100%)</span>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Rendering CHOICE */}
-                              {ans.type === "choice" && (
-                                <div className="mt-2 space-y-2">
-                                  <div className="flex items-baseline justify-between">
-                                    <span className="text-xs text-zinc-400">Selected:</span>
-                                    <span className="text-lg font-mono font-bold text-cyan-300 uppercase">
-                                      {ans.choice || "N/A"}
-                                    </span>
-                                  </div>
-
-                                  {ans.probabilities && (
-                                    <div className="space-y-1.5 mt-2">
-                                      {Object.entries(ans.probabilities).map(
-                                        ([optKey, prob]) => {
-                                          const pct = (Number(prob) * 100).toFixed(1);
-                                          const isSelected = ans.choice === optKey;
-                                          return (
-                                            <div key={optKey} className="text-xs">
-                                              <div className="flex justify-between text-[11px] font-mono text-zinc-300 mb-0.5">
-                                                <span
-                                                  className={
-                                                    isSelected
-                                                      ? "text-cyan-300 font-bold"
-                                                      : "text-zinc-400"
-                                                  }
-                                                >
-                                                  {optKey}
-                                                </span>
-                                                <span className="text-zinc-400">{pct}%</span>
-                                              </div>
-                                              <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                                                <div
-                                                  className={`h-full ${
-                                                    isSelected ? "bg-cyan-400" : "bg-zinc-600"
-                                                  }`}
-                                                  style={{ width: `${pct}%` }}
-                                                />
-                                              </div>
-                                            </div>
-                                          );
-                                        }
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* Rendering SCORE */}
-                              {ans.type === "score" && (
-                                <div className="mt-2 space-y-2">
-                                  <div className="flex items-baseline justify-between">
-                                    <span className="text-xs text-zinc-400">Rubric Score:</span>
-                                    <span className="text-base font-mono font-bold text-purple-300">
-                                      {String(ans.score)}
-                                    </span>
-                                  </div>
-                                  <div className="p-2.5 rounded bg-[#161a29] border border-zinc-800 text-xs font-mono text-zinc-300">
-                                    Calibrated Position: {String(ans.score)}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      }
-                    )}
-                  </div>
-                )}
-
-                {/* Workflow Automation Simulation */}
-                <div className="p-4 rounded-xl bg-gradient-to-r from-cyan-950/40 via-indigo-950/40 to-[#101322] border border-cyan-800/40">
-                  <div className="flex items-center gap-2 text-cyan-300 font-mono text-xs font-bold uppercase mb-2">
-                    <span>⚡</span> Simulated Application Action:
-                  </div>
-                  <div className="text-xs font-mono text-zinc-300 space-y-1">
-                    {executionResult.answers?.is_urgent?.noul > 0.7 &&
-                    executionResult.answers?.department?.choice === "billing" ? (
-                      <p className="text-emerald-300 font-semibold">
-                        🚨 ACTION TRIGGERED: High urgency billing ticket detected ({">"}70%).
-                        Auto-assigned to Tier 2 Payouts On-Call Slack channel.
-                      </p>
-                    ) : executionResult.answers?.is_spam?.noul > 0.8 ? (
-                      <p className="text-rose-300 font-semibold">
-                        🛑 ACTION TRIGGERED: Spam probability {">"}80%. Auto-quarantined post
-                        and flagged author account.
-                      </p>
-                    ) : executionResult.answers?.is_enterprise?.noul > 0.7 ? (
-                      <p className="text-cyan-300 font-semibold">
-                        💼 ACTION TRIGGERED: Enterprise deal signaled. Synced contact to
-                        Salesforce and notified Enterprise Account Executive.
-                      </p>
-                    ) : (
-                      <p className="text-zinc-400">
-                        ✔️ Standard decision workflow completed. Answers successfully parsed
-                        and actionable.
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Full Raw JSON toggle */}
-                <details className="rounded-xl border border-zinc-800 bg-[#0f121d] overflow-hidden text-xs">
-                  <summary className="p-3 font-mono text-zinc-400 cursor-pointer hover:text-zinc-200 hover:bg-zinc-800/30">
-                    View Complete Raw JSON Response
-                  </summary>
-                  <pre className="p-4 font-mono text-cyan-200 overflow-x-auto bg-[#090b12] border-t border-zinc-800 text-[11px] leading-relaxed">
-                    {JSON.stringify(executionResult, null, 2)}
-                  </pre>
-                </details>
-              </div>
-            )}
+const data = await response.json();
+console.log(data.answers.needs_mcp.noul); // Calibrated probability (e.g. 0.94)`}</code>
+              </pre>
+            </div>
           </div>
-        </section>
+        )}
 
-        {/* Footer */}
-        <footer className="pt-8 border-t border-zinc-800/80 text-center text-xs font-mono text-zinc-500 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div>
-            Built with Typesafe Decisions API · Model:{" "}
-            <code className="text-cyan-400">typesafe/jev-1.13</code>
-          </div>
-          <div>
-            <Link href="/" className="text-cyan-400 hover:underline">
-              Return to Main Agent Dashboard →
-            </Link>
-          </div>
-        </footer>
       </div>
     </div>
   );

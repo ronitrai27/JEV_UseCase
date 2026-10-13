@@ -66,12 +66,12 @@ export default function Home() {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-mono text-indigo-400 font-semibold">
-                  02 · How to Test
+                  02 · Multi-Agent Router
                 </span>
-                <span className="text-[10px] font-mono text-zinc-500">Interactive</span>
+                <span className="text-[10px] font-mono text-cyan-400">6 Sub-Agents</span>
               </div>
               <p className="text-xs text-zinc-400 leading-normal">
-                Input your state message, select questions (<code className="text-indigo-300 font-mono text-[11px]">noul</code>, <code className="text-indigo-300 font-mono text-[11px]">choice</code>, <code className="text-indigo-300 font-mono text-[11px]">score</code>), and inspect calibrated probabilities.
+                JEV directs chit-chat to <code className="text-zinc-200 font-mono text-[11px]">main_agent</code> or triggers 1, 2, or 3 specialized sub-agents in parallel (<code className="text-indigo-300 font-mono text-[11px]">db_write</code>, <code className="text-indigo-300 font-mono text-[11px]">memory</code>, <code className="text-indigo-300 font-mono text-[11px]">analysist</code>, <code className="text-indigo-300 font-mono text-[11px]">web</code>, <code className="text-indigo-300 font-mono text-[11px]">mcp</code>, <code className="text-indigo-300 font-mono text-[11px]">sprint</code>).
               </p>
             </div>
           </div>
@@ -83,7 +83,7 @@ export default function Home() {
             href="/jev"
             className="w-full sm:w-auto px-7 py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-medium text-sm tracking-wide shadow-lg shadow-cyan-500/10 active:scale-95 transition-all flex items-center justify-center gap-2"
           >
-            <span>Go to JEV Use Case</span>
+            <span>Launch Multi-Agent Router</span>
             <span className="font-mono">→</span>
           </Link>
 

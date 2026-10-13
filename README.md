@@ -32,6 +32,17 @@ Your code owns the business logic and acts directly on the returned probabilitie
 
 ## What this Project Does
 
+- **Multi-Agent Orchestrator (`/jev`)**: 
+  - Simulates a real multi-agent team with **1 Main Agent** (conversational user-facing) and **6 Specialized Sub-Agents**:
+    - `db_write_agent`: Database mutations and persistent record storage.
+    - `memory_agent`: User context, conversation history, and preference recall.
+    - `analysist_agent`: Mathematical computation, metrics synthesis, and analytical evaluation.
+    - `web_agent`: Live internet search, Google queries, and external URL fetching.
+    - `mcp_agent`: Model Context Protocol server tools and filesystem operations.
+    - `sprint_agent`: Agile sprint backlog breakdown, task ticket creation, and milestones.
+  - **Dynamic Routing**:
+    - Simple chit-chat & greetings are routed directly to `main_agent` with **0 sub-agents needed**.
+    - Complex tasks dispatch **1, 2, or 3 sub-agents in parallel** based on JEV's calibrated probabilities!
 - **Minimal Welcome Guide (`/`)**: A clean landing page with an interactive isometric hairline vector canvas, setup steps, and direct links to get your OpenRouter API key.
 - **Interactive Playground (`/jev`)**: 
   - Test JEV live in the browser with custom state messages and schema configurations.

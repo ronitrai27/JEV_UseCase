@@ -3,13 +3,19 @@ import { NextRequest, NextResponse } from "next/server";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const apiKey = (body.apiKey?.trim() || process.env.OPENROUTER_API_KEY || "").trim();
+    const apiKey = (
+      body.apiKey?.trim() ||
+      process.env.OPENROUTER_API_KEY ||
+      process.env.OPEN_ROUTER_API_KEY ||
+      process.env.OPENROUTER_KEY ||
+      ""
+    ).trim();
 
     if (!apiKey) {
       return NextResponse.json(
         {
           error:
-            "Missing OpenRouter API Key. Please enter your API key in the input box or configure OPENROUTER_API_KEY in .env.local",
+            "Missing OpenRouter API Key. Please ensure OPENROUTER_API_KEY is set in your .env or .env.local file, or pass apiKey in the request.",
         },
         { status: 401 }
       );
